@@ -1,0 +1,204 @@
+package com.dianping.service.impl;
+
+import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.dianping.common.ErrorCode;
+import com.dianping.common.BusinessException;
+import com.dianping.common.Result;
+import com.dianping.config.RabbitMQConfig;
+import com.dianping.entity.Admin;
+import com.dianping.entity.Shop;
+import com.dianping.entity.User;
+import com.dianping.entity.Voucher;
+import com.dianping.mapper.*;
+import com.dianping.service.IAdminService;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+
+import javax.annotation.Resource;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
+@Slf4j
+@Service
+public class AdminServiceImpl implements IAdminService {
+
+    @Resource
+    private AdminMapper adminMapper;
+
+    @Resource
+    private ShopMapper shopMapper;
+
+    @Resource
+    private UserMapper userMapper;
+
+    @Resource
+    private VoucherMapper voucherMapper;
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private BloomFilterService bloomFilterService;
+
+    @Resource
+    private RabbitTemplate rabbitTemplate;
+
+    @Resource
+    private ObjectMapper jsonMapper;
+
+    @Resource(name = "shopCache")
+    private Cache<Long, Shop> shopCache;
+
+    @Override
+    public Result login(String username, String password) {
+        Admin admin = adminMapper.selectOne(
+                new LambdaQueryWrapper<Admin>().eq(Admin::getUsername, username));
+        if (admin == null || !password.equals(admin.getPassword())) {
+            // For learning project, plaintext compare
+            throw new BusinessException(ErrorCode.ADMIN_AUTH_FAIL);
+        }
+        String token = "admin:" + UUID.randomUUID().toString();
+        Map<String, String> adminMap = new HashMap<>();
+        adminMap.put("id", admin.getId().toString());
+        adminMap.put("username", admin.getUsername());
+        adminMap.put("nickname", admin.getNickname());
+        stringRedisTemplate.opsForHash().putAll("admin:token:" + token, adminMap);
+        stringRedisTemplate.expire("admin:token:" + token, 60, TimeUnit.MINUTES);
+        return Result.ok(token);
+    }
+
+    @Override
+    public Result logout(String token) {
+        stringRedisTemplate.delete("admin:token:" + token);
+        return Result.ok(null);
+    }
+
+    @Override
+    public Page<Shop> queryShops(Integer current, String name) {
+        LambdaQueryWrapper<Shop> wrapper = new LambdaQueryWrapper<>();
+        if (StrUtil.isNotBlank(name)) {
+            wrapper.like(Shop::getName, name);
+        }
+        return shopMapper.selectPage(new Page<>(current, 20), wrapper);
+    }
+
+    @Override
+    public Result saveShop(Shop shop) {
+        shopMapper.insert(shop);
+
+        // 1. 更新本地 BloomFilter
+        bloomFilterService.addShopId(shop.getId());
+
+        // 2. 预热 Redis 缓存（多实例窗口期兜底）
+        try {
+            String json = jsonMapper.writeValueAsString(shop);
+            long ttl = 30L + (long) (Math.random() * 30);
+            stringRedisTemplate.opsForValue().set("cache:shop:" + shop.getId(), json, ttl, TimeUnit.MINUTES);
+        } catch (Exception e) {
+            log.warn("Failed to warm Redis cache for shop {}", shop.getId(), e);
+        }
+
+        // 3. MQ 通知其他实例同步 BloomFilter
+        try {
+            rabbitTemplate.convertAndSend(RabbitMQConfig.BLOOM_FANOUT,
+                    RabbitMQConfig.BLOOM_ROUTING_KEY, shop.getId());
+        } catch (Exception e) {
+            log.warn("Failed to send Bloom sync message for shop {}", shop.getId(), e);
+        }
+
+        // 4. 写入 GEO
+        String geoKey = "shop:geo:" + shop.getTypeId();
+        stringRedisTemplate.opsForGeo().add(geoKey,
+                new org.springframework.data.geo.Point(shop.getX(), shop.getY()),
+                shop.getId().toString());
+        return Result.ok(shop.getId());
+    }
+
+    @Override
+    public Result updateShop(Shop shop) {
+        shopMapper.updateById(shop);
+
+        Long shopId = shop.getId();
+        // 1. 失效本地 Caffeine L1
+        shopCache.invalidate(shopId);
+        // 2. 删除 Redis L2
+        stringRedisTemplate.delete("cache:shop:" + shopId);
+        // 3. MQ 广播通知其他实例失效 Caffeine
+        try {
+            rabbitTemplate.convertAndSend(RabbitMQConfig.CACHE_INVALIDATE_FANOUT,
+                    RabbitMQConfig.CACHE_INVALIDATE_ROUTING_KEY, shopId);
+        } catch (Exception e) {
+            log.warn("Failed to send cache invalidate message for shop {}", shopId, e);
+        }
+        // 4. 更新 GEO
+        String geoKey = "shop:geo:" + shop.getTypeId();
+        stringRedisTemplate.opsForGeo().add(geoKey,
+                new org.springframework.data.geo.Point(shop.getX(), shop.getY()),
+                shop.getId().toString());
+        return Result.ok(null);
+    }
+
+    @Override
+    public Result deleteShop(Long id) {
+        shopMapper.deleteById(id);
+        // 1. 失效本地 Caffeine L1
+        shopCache.invalidate(id);
+        // 2. 删除 Redis L2
+        stringRedisTemplate.delete("cache:shop:" + id);
+        // 3. MQ 广播通知其他实例失效 Caffeine
+        try {
+            rabbitTemplate.convertAndSend(RabbitMQConfig.CACHE_INVALIDATE_FANOUT,
+                    RabbitMQConfig.CACHE_INVALIDATE_ROUTING_KEY, id);
+        } catch (Exception e) {
+            log.warn("Failed to send cache invalidate message for shop {}", id, e);
+        }
+        return Result.ok(null);
+    }
+
+    @Override
+    public Page<Voucher> queryVouchers(Integer current, Long shopId) {
+        LambdaQueryWrapper<Voucher> wrapper = new LambdaQueryWrapper<>();
+        if (shopId != null) {
+            wrapper.eq(Voucher::getShopId, shopId);
+        }
+        return voucherMapper.selectPage(new Page<>(current, 20), wrapper);
+    }
+
+    @Override
+    public Result deleteVoucher(Long id) {
+        voucherMapper.deleteById(id);
+        return Result.ok(null);
+    }
+
+    @Override
+    public Page<User> queryUsers(Integer current, String phone) {
+        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
+        if (StrUtil.isNotBlank(phone)) {
+            wrapper.like(User::getPhone, phone);
+        }
+        return userMapper.selectPage(new Page<>(current, 20), wrapper);
+    }
+
+    @Override
+    public Admin getCurrentAdmin(String token) {
+        String key = "admin:token:" + token;
+        Map<Object, Object> entries = stringRedisTemplate.opsForHash().entries(key);
+        if (entries.isEmpty()) {
+            return null;
+        }
+        Admin admin = new Admin();
+        admin.setId(Long.valueOf((String) entries.get("id")));
+        admin.setUsername((String) entries.get("username"));
+        admin.setNickname((String) entries.get("nickname"));
+        return admin;
+    }
+}
