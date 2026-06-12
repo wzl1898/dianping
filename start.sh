@@ -39,4 +39,10 @@ mvn test -q || echo "  ⚠ 部分测试失败，请检查"
 echo "[5/5] 启动应用..."
 echo "  应用将在 http://localhost:8080 启动"
 echo "  API 文档: http://localhost:8080/swagger-ui.html"
-mvn spring-boot:run
+if [ "$1" == "--sharding" ]; then
+    echo "  ★ 分库分表模式 [spring.profiles.active=sharding]"
+    PROFILES="--spring-boot.run.profiles=sharding"
+else
+    PROFILES=""
+fi
+mvn spring-boot:run ${PROFILES}

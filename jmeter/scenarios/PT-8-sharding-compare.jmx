@@ -1,0 +1,274 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Dianping Sharding Comparison Test">
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments"/>
+    </TestPlan>
+    <hashTree>
+
+      <!-- ============================================================ -->
+      <!-- 参数定义 -->
+      <!-- ============================================================ -->
+      <Arguments guiclass="ArgumentsPanel" testclass="Arguments" testname="参数">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="target.host" elementType="Argument">
+            <stringProp name="Argument.name">target.host</stringProp>
+            <stringProp name="Argument.value">localhost</stringProp>
+          </elementProp>
+          <elementProp name="target.port" elementType="Argument">
+            <stringProp name="Argument.name">target.port</stringProp>
+            <stringProp name="Argument.value">8080</stringProp>
+          </elementProp>
+          <elementProp name="thread.count" elementType="Argument">
+            <stringProp name="Argument.name">thread.count</stringProp>
+            <stringProp name="Argument.value">500</stringProp>
+          </elementProp>
+          <elementProp name="voucher.id" elementType="Argument">
+            <stringProp name="Argument.name">voucher.id</stringProp>
+            <stringProp name="Argument.value">1</stringProp>
+          </elementProp>
+        </collectionProp>
+      </Arguments>
+      <hashTree/>
+
+      <!-- ============================================================ -->
+      <!-- setUp: 生成测试用户 Token -->
+      <!-- ============================================================ -->
+      <SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup" testname="setUp-生成用户Token">
+        <intProp name="ThreadGroup.num_threads">1</intProp>
+        <intProp name="ThreadGroup.ramp_time">1</intProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+      </SetupThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="生成500个用户Token">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+import java.nio.file.*
+
+def csvFile = "/tmp/sharding-test-users.csv"
+def apiUrl = "http://${__P(target.host)}:${__P(target.port)}"
+def userCount = 500
+
+// 生成不同 user_id 的登录 Token（通过 API 或直接操作 Redis）
+// 这里使用 JMeter 无法直接操作 Redis，改用预设 CSV
+def sb = new StringBuilder()
+sb.append("user_id,token\n")
+for (int i = 0; i < userCount; i++) {
+    def uid = 1001 + i
+    sb.append("${uid},sharding_test_token_${uid}\n")
+}
+Files.write(Paths.get(csvFile), sb.toString().bytes)
+SampleResult.setSuccessful(true)
+SampleResult.setResponseMessage("Generated ${userCount} tokens")
+          </stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ============================================================ -->
+      <!-- 场景 1：低并发 — 100 并发，观察基础性能 -->
+      <!-- ============================================================ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="场景1-100并发-秒杀下单">
+        <intProp name="ThreadGroup.num_threads">100</intProp>
+        <intProp name="ThreadGroup.ramp_time">1</intProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="用户 Token">
+          <stringProp name="filename">/tmp/sharding-test-users.csv</stringProp>
+          <stringProp name="variableNames">user_id,token</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">thread</stringProp>
+        </CSVDataSet>
+        <hashTree/>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Headers">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <stringProp name="Header.value">${token}</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="秒杀下单">
+          <stringProp name="HTTPSampler.domain">${target.host}</stringProp>
+          <intProp name="HTTPSampler.port">${target.port}</intProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/voucher/seckill/${voucher.id}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ============================================================ -->
+      <!-- 场景 2：中并发 — 500 并发，观察吞吐量拐点 -->
+      <!-- ============================================================ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="场景2-500并发-秒杀下单">
+        <intProp name="ThreadGroup.num_threads">500</intProp>
+        <intProp name="ThreadGroup.ramp_time">2</intProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="用户 Token">
+          <stringProp name="filename">/tmp/sharding-test-users.csv</stringProp>
+          <stringProp name="variableNames">user_id,token</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">thread</stringProp>
+        </CSVDataSet>
+        <hashTree/>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Headers">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <stringProp name="Header.value">${token}</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="秒杀下单">
+          <stringProp name="HTTPSampler.domain">${target.host}</stringProp>
+          <intProp name="HTTPSampler.port">${target.port}</intProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/voucher/seckill/${voucher.id}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ============================================================ -->
+      <!-- 场景 3：高并发 — 1000 并发，分片效果最明显 -->
+      <!-- ============================================================ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="场景3-1000并发-秒杀下单（分片效果最明显）">
+        <intProp name="ThreadGroup.num_threads">1000</intProp>
+        <intProp name="ThreadGroup.ramp_time">5</intProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="用户 Token">
+          <stringProp name="filename">/tmp/sharding-test-users.csv</stringProp>
+          <stringProp name="variableNames">user_id,token</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">thread</stringProp>
+        </CSVDataSet>
+        <hashTree/>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Headers">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <stringProp name="Header.value">${token}</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="秒杀下单">
+          <stringProp name="HTTPSampler.domain">${target.host}</stringProp>
+          <intProp name="HTTPSampler.port">${target.port}</intProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/voucher/seckill/${voucher.id}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ============================================================ -->
+      <!-- 场景 4：高并发（重复 3 次，取平均值） -->
+      <!-- ============================================================ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="场景4-1000并发-秒杀下单（重复-验证稳定性）">
+        <intProp name="ThreadGroup.num_threads">1000</intProp>
+        <intProp name="ThreadGroup.ramp_time">3</intProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="用户 Token">
+          <stringProp name="filename">/tmp/sharding-test-users.csv</stringProp>
+          <stringProp name="variableNames">user_id,token</stringProp>
+          <stringProp name="delimiter">,</stringProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
+          <stringProp name="shareMode">thread</stringProp>
+        </CSVDataSet>
+        <hashTree/>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Headers">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Authorization</stringProp>
+              <stringProp name="Header.value">${token}</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="秒杀下单">
+          <stringProp name="HTTPSampler.domain">${target.host}</stringProp>
+          <intProp name="HTTPSampler.port">${target.port}</intProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/voucher/seckill/${voucher.id}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ============================================================ -->
+      <!-- Listeners: 聚合报告和结果树 -->
+      <!-- ============================================================ -->
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="聚合报告">
+        <stringProp name="filename">jmeter/report/sharding-summary.csv</stringProp>
+        <boolProp name="ResultCollector.success_only_logging">false</boolProp>
+        <elementProp name="ResultCollector.table" elementType="Arguments"/>
+      </ResultCollector>
+      <hashTree/>
+
+      <ResultCollector guiclass="StatGraphVisualizer" testclass="ResultCollector" testname="TPS">
+        <stringProp name="filename">jmeter/report/sharding-tps.csv</stringProp>
+        <elementProp name="ResultCollector.table" elementType="Arguments"/>
+      </ResultCollector>
+      <hashTree/>
+
+      <ResultCollector guiclass="GraphVisualizer" testclass="ResultCollector" testname="响应时间图">
+        <elementProp name="ResultCollector.table" elementType="Arguments"/>
+      </ResultCollector>
+      <hashTree/>
+
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

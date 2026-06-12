@@ -56,3 +56,57 @@ springdoc:
     path: /api-docs
   swagger-ui:
     path: /swagger-ui.html
+
+---
+# ============================================================
+# 分库分表配置（激活方式：--spring.profiles.active=sharding）
+# 策略：tb_voucher_order 按 user_id 分 2 库，其他表走默认库 ds0
+# ============================================================
+spring:
+  config:
+    activate:
+      on-profile: sharding
+
+  # 分片模式下由 ShardingSphere 管理数据源，原生 spring.datasource 被替换
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+
+  shardingsphere:
+    datasource:
+      names: ds0,ds1
+      ds0:
+        type: com.zaxxer.hikari.HikariDataSource
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        jdbc-url: jdbc:mysql://localhost:3307/dianping_ds0?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+        username: root
+        password: root
+      ds1:
+        type: com.zaxxer.hikari.HikariDataSource
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        jdbc-url: jdbc:mysql://localhost:3307/dianping_ds1?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+        username: root
+        password: root
+
+    rules:
+      sharding:
+        tables:
+          # 秒杀订单表 — 按 user_id 分库，user_id 偶→ds0，奇→ds1
+          tb_voucher_order:
+            actual-data-nodes: ds${0..1}.tb_voucher_order
+            database-strategy:
+              standard:
+                sharding-column: user_id
+                sharding-algorithm-name: voucher_order_db_mod
+
+        # 默认数据源：所有未配置分片的表走 ds0
+        default-data-source: ds0
+
+        sharding-algorithms:
+          voucher_order_db_mod:
+            type: MOD
+            props:
+              sharding-count: 2
+
+    props:
+      # 打印 SQL 日志，方便验证分片路由是否正确
+      sql-show: true
