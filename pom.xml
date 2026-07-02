@@ -20,6 +20,7 @@
 
     <properties>
         <java.version>1.8</java.version>
+        <snakeyaml.version>1.33</snakeyaml.version>
     </properties>
 
     <dependencies>
@@ -98,10 +99,12 @@
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>
         </dependency>
+
+        <!-- ShardingSphere-JDBC -->
         <dependency>
-            <groupId>com.google.guava</groupId>
-            <artifactId>guava</artifactId>
-            <version>31.1-jre</version>
+            <groupId>org.apache.shardingsphere</groupId>
+            <artifactId>shardingsphere-jdbc-core-spring-boot-starter</artifactId>
+            <version>5.2.1</version>
         </dependency>
 
         <!-- Test -->

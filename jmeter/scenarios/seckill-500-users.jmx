@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Dianping Seckill - 500 Users">
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments"/>
+    </TestPlan>
+    <hashTree>
+      <!-- CSV: 每个线程一个不同用户 -->
+      <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="Users CSV">
+        <stringProp name="filename">/tmp/seckill-users.csv</stringProp>
+        <stringProp name="variableNames">phone,token</stringProp>
+        <stringProp name="delimiter">,</stringProp>
+        <boolProp name="quotedData">false</boolProp>
+        <boolProp name="recycle">false</boolProp>
+        <boolProp name="stopThread">true</boolProp>
+        <stringProp name="shareMode">thread</stringProp>
+      </CSVDataSet>
+      <hashTree/>
+
+      <!-- 公共请求头 -->
+      <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Headers">
+        <collectionProp name="HeaderManager.headers">
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Content-Type</stringProp>
+            <stringProp name="Header.value">application/json</stringProp>
+          </elementProp>
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Authorization</stringProp>
+            <stringProp name="Header.value">${token}</stringProp>
+          </elementProp>
+        </collectionProp>
+      </HeaderManager>
+      <hashTree/>
+
+      <!-- 500 线程，每线程 1 个不同用户 -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="500用户-秒杀-不同用户">
+        <intProp name="ThreadGroup.num_threads">500</intProp>
+        <intProp name="ThreadGroup.ramp_time">1</intProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <!-- 秒杀请求 -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="秒杀下单">
+          <stringProp name="HTTPSampler.domain">${__P(target.host,localhost)}</stringProp>
+          <intProp name="HTTPSampler.port">${__P(target.port,8080)}</intProp>
+          <stringProp name="HTTPSampler.protocol">http</stringProp>
+          <stringProp name="HTTPSampler.path">/api/voucher/seckill/1</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

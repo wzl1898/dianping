@@ -101,9 +101,9 @@ CREATE TABLE IF NOT EXISTS `tb_seckill_voucher` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='秒杀券信息表';
 
 -- ============================================================
--- 6. 订单表
+-- 6. 订单表（分片表，按 user_id MOD 4 路由到 tb_voucher_order_0~3）
 -- ============================================================
-CREATE TABLE IF NOT EXISTS `tb_voucher_order` (
+CREATE TABLE IF NOT EXISTS `tb_voucher_order_0` (
     `id`          BIGINT   NOT NULL COMMENT '订单ID（分布式ID生成）',
     `user_id`     BIGINT   NOT NULL COMMENT '用户ID',
     `voucher_id`  BIGINT   NOT NULL COMMENT '优惠券ID',
@@ -117,7 +117,11 @@ CREATE TABLE IF NOT EXISTS `tb_voucher_order` (
     UNIQUE KEY `uk_user_voucher` (`user_id`, `voucher_id`),
     KEY `idx_user_id` (`user_id`),
     KEY `idx_voucher_id` (`voucher_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单分片表0';
+
+CREATE TABLE IF NOT EXISTS `tb_voucher_order_1` LIKE `tb_voucher_order_0`;
+CREATE TABLE IF NOT EXISTS `tb_voucher_order_2` LIKE `tb_voucher_order_0`;
+CREATE TABLE IF NOT EXISTS `tb_voucher_order_3` LIKE `tb_voucher_order_0`;
 
 -- ============================================================
 -- 7. 探店笔记表
